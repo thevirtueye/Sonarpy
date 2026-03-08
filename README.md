@@ -1,4 +1,4 @@
-# Sonarpy
+# sonarpy
 
 Advanced network scanner with TCP and UDP support, built in Python.
 
