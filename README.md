@@ -1,5 +1,9 @@
 # sonarpy
 
+![Python 3.8+](https://img.shields.io/badge/Python-3.8%2B-blue)
+![License MIT](https://img.shields.io/badge/License-MIT-green)
+![Platform Linux | macOS | Windows](https://img.shields.io/badge/Platform-Linux%20|%20macOS%20|%20Windows-lightgrey)
+
 Advanced network scanner with TCP and UDP support, built in Python.
 
 ## Features
@@ -21,8 +25,11 @@ Advanced network scanner with TCP and UDP support, built in Python.
 
 - Python 3.8+
 - Scapy 2.5+ (optional, for SYN scans)
+- Npcap (Windows only, required for Scapy)
 
 ## Installation
+
+### Linux / macOS
 
 ```
 git clone https://github.com/thevirtueye/sonarpy.git
@@ -31,9 +38,24 @@ pip install -e .
 pip install scapy
 ```
 
+### Windows
+
+Install [Npcap](https://npcap.com/#download) first (required for Scapy support).
+
+```
+git clone https://github.com/thevirtueye/sonarpy.git
+cd sonarpy
+py -m pip install -e .
+py -m pip install scapy
+```
+
+Scapy and Npcap are optional on all platforms. Without them, Sonarpy automatically falls back to socket-based scanning which works without any extra dependencies.
+
+### Running
+
 After installation, the `sonarpy` command is available system-wide.
 
-Without sudo, Sonarpy automatically falls back to socket-based scanning. With sudo, it uses Scapy for more precise SYN scans.
+On Linux/macOS, use `sudo sonarpy` for SYN scans. On Windows, run the terminal as Administrator.
 
 ## Usage
 
@@ -113,15 +135,17 @@ For faster scans when service version detection is not needed:
 sonarpy 192.168.1.1 -p 1-65535 --no-banner --threads 200
 ```
 
-### SYN scan (with sudo)
+### SYN scan (with elevated privileges)
 
-Running with root privileges enables Scapy-based SYN scanning, which is more precise and stealthy:
+Running with root/admin privileges enables Scapy-based SYN scanning, which is more precise and stealthy:
 
 ```
 sudo sonarpy 192.168.1.1 --top-ports 50
 ```
 
-Without sudo, Sonarpy automatically detects this and falls back to socket-based scanning with a notification message.
+On Windows, run the terminal as Administrator instead of using sudo.
+
+Without elevated privileges, Sonarpy automatically detects this and falls back to socket-based scanning with a notification message.
 
 ## CLI Reference
 
@@ -179,6 +203,7 @@ sonarpy/
 - SYN scans require root/admin privileges. Without them, Sonarpy falls back to connect scans automatically.
 - UDP scanning is inherently slower and less reliable than TCP due to the nature of the protocol.
 - The retry mechanism helps against targets that rate-limit connections. Increase `--retries` and decrease `--threads` for stubborn targets.
+- On Windows, Npcap is required only for Scapy-based SYN scans. Without Npcap, Sonarpy works with socket-based scanning.
 - Use responsibly. Only scan networks you are authorized to scan.
 
 
