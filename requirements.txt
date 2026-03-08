@@ -1,0 +1,5 @@
+# Sonarpy v5.0 - Requirements
+
+# Optional: Scapy for SYN scans and advanced UDP scanning
+# Not required if using --socket-mode
+scapy>=2.5.0
