@@ -181,10 +181,13 @@ sonarpy/
 - The retry mechanism helps against targets that rate-limit connections. Increase `--retries` and decrease `--threads` for stubborn targets.
 - Use responsibly. Only scan networks you are authorized to scan.
 
-## Author
-
-Alberto Cirillo (thevirtueye) -- 2025
 
 ## License
 
-MIT License
+This project is released under the **MIT License**.  
+Free to use for educational and research purposes. Please credit the author where applicable.
+
+
+## Author
+
+Created by **Alberto Cirillo** — 2026
