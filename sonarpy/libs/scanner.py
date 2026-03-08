@@ -30,19 +30,18 @@ class PortScanner:
         threads: int = 100,
         timeout: float = 1.0,
         grab_banner: bool = True,
-        socket_only: bool = False,
+        retries: int = 2,
     ):
         self.threads = threads
         self.timeout = timeout
         self.grab_banner = grab_banner
-        self.socket_only = socket_only
+        self.socket_only = False
+        self.retries = retries
         self.banner_grabber = BannerGrabber(timeout=timeout)
         self.service_id = ServiceIdentifier()
         self._os_cache = {}
-        self._scapy_warned = False
 
-        if not self.socket_only:
-            self._check_scapy()
+        self._check_scapy()
 
     def _check_scapy(self):
         try:
@@ -313,6 +312,15 @@ class PortScanner:
         except Exception:
             return None
 
+    def _scan_with_retry(self, scan_func, ip: str, port: int) -> Optional[Dict]:
+        for attempt in range(self.retries):
+            result = scan_func(ip, port)
+            if result is not None:
+                return result
+            if attempt < self.retries - 1:
+                time.sleep(0.1)
+        return None
+
     def _format_eta(self, elapsed: float, completed: int, total: int) -> str:
         if completed == 0:
             return "calculating..."
@@ -322,7 +330,7 @@ class PortScanner:
             return f"{remaining:.0f}s"
         return f"{remaining / 60:.1f}m"
 
-    def scan_tcp(self, ip: str, ports: List[int], verbose: bool = False) -> List[Dict]:
+    def scan_tcp(self, ip: str, ports: List[int]) -> List[Dict]:
         results = []
         total_ports = len(ports)
         start_time = time.time()
@@ -336,7 +344,8 @@ class PortScanner:
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_threads) as executor:
             future_to_port = {
-                executor.submit(scan_func, ip, port): port for port in ports
+                executor.submit(self._scan_with_retry, scan_func, ip, port): port
+                for port in ports
             }
 
             completed = 0
@@ -371,7 +380,6 @@ class PortScanner:
         self,
         ip: str,
         ports: List[int],
-        verbose: bool = False,
         open_only: bool = False,
     ) -> List[Dict]:
         results = []
@@ -387,7 +395,8 @@ class PortScanner:
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=udp_threads) as executor:
             future_to_port = {
-                executor.submit(scan_func, ip, port): port for port in ports
+                executor.submit(self._scan_with_retry, scan_func, ip, port): port
+                for port in ports
             }
 
             completed = 0
@@ -427,7 +436,6 @@ class PortScanner:
         ports: List[int],
         tcp: bool = True,
         udp: bool = False,
-        verbose: bool = False,
         open_only: bool = False,
     ) -> Dict:
         results = {
@@ -438,9 +446,9 @@ class PortScanner:
         }
 
         if tcp:
-            results["tcp"] = self.scan_tcp(ip, ports, verbose)
+            results["tcp"] = self.scan_tcp(ip, ports)
 
         if udp:
-            results["udp"] = self.scan_udp(ip, ports, verbose, open_only)
+            results["udp"] = self.scan_udp(ip, ports, open_only)
 
         return results

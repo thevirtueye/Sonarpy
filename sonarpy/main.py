@@ -6,7 +6,6 @@ Sonarpy v5.0 - Advanced Network Scanner with TCP/UDP support
 import argparse
 import ipaddress
 import re
-import socket
 import sys
 import time
 
@@ -58,18 +57,9 @@ def parse_ports(port_string: str) -> list:
     return sorted(list(ports))
 
 
-def resolve_target(target: str) -> str:
+def validate_target(target: str) -> bool:
     ip_regex = r"^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)(?:/([0-9]|[12][0-9]|3[0-2]))?$"
-
-    if re.match(ip_regex, target):
-        return target
-
-    try:
-        ip = socket.gethostbyname(target)
-        print(f"{Colors.DIM}[*] Resolved {target} -> {ip}{Colors.RESET}")
-        return ip
-    except socket.gaierror:
-        return ""
+    return bool(re.match(ip_regex, target))
 
 
 def main():
@@ -81,18 +71,18 @@ def main():
         epilog="""
 Examples:
   sonarpy 192.168.1.1 -p 22,80,443
-  sonarpy 192.168.1.0/24 -p 1-1000 --udp
-  sonarpy scanme.nmap.org --top-ports 100
-  sonarpy 10.0.0.1 -p 1-65535 --tcp --udp --format json
-  sonarpy 192.168.1.1 -p 1-1000 --tcp --udp
-  sonarpy 192.168.1.1 --top-ports 20 --format txt,json,csv
-  sonarpy 192.168.1.50 -Pn --top-ports 50 --socket-mode
+  sonarpy 192.168.1.1 --top-ports 50
+  sonarpy 192.168.1.0/24 --top-ports 20
+  sonarpy 192.168.1.1 --top-ports 50 --tcp --udp
+  sonarpy 192.168.1.100 -Pn -p 1-1000
+  sonarpy 192.168.1.1 --top-ports 50 --format txt,json,csv
+  sonarpy 192.168.1.1 -p 1-1000 --no-banner --threads 200
         """,
     )
 
     parser.add_argument(
         "target",
-        help="Target IP, subnet or hostname (e.g. 192.168.1.1, 192.168.1.0/24, scanme.nmap.org)",
+        help="Target IP or subnet (e.g. 192.168.1.1, 192.168.1.0/24)",
     )
 
     port_group = parser.add_mutually_exclusive_group(required=True)
@@ -105,7 +95,7 @@ Examples:
         "--top-ports",
         type=int,
         metavar="N",
-        help="Scan top N most common ports (e.g. 20, 50, 100)",
+        help="Scan top N most common ports (TCP max: 100, UDP max: 30)",
     )
 
     parser.add_argument("--tcp", action="store_true", default=False, help="TCP scan")
@@ -131,12 +121,13 @@ Examples:
         "--timeout", type=float, default=1.0, help="Timeout in seconds (default: 1.0)"
     )
     parser.add_argument(
-        "--no-banner", action="store_true", help="Disable banner grabbing"
+        "--retries",
+        type=int,
+        default=2,
+        help="Number of retries per port (default: 2)",
     )
     parser.add_argument(
-        "--socket-mode",
-        action="store_true",
-        help="Use sockets only, no scapy (recommended on Windows)",
+        "--no-banner", action="store_true", help="Disable banner grabbing"
     )
     parser.add_argument(
         "--open-only",
@@ -144,28 +135,10 @@ Examples:
         help="Show only confirmed open ports (hides open|filtered)",
     )
     parser.add_argument(
-        "--exclude-ports",
-        type=str,
-        default=None,
-        help="Ports to exclude (e.g. 22,80 or 100-200)",
-    )
-    parser.add_argument(
         "-Pn",
         "--skip-discovery",
         action="store_true",
         help="Skip host discovery, treat all hosts as online",
-    )
-    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
-    parser.add_argument(
-        "-q",
-        "--quiet",
-        action="store_true",
-        help="Minimal output (open ports only, no decorations)",
-    )
-    parser.add_argument(
-        "--version",
-        action="version",
-        version="Sonarpy v5.0",
     )
 
     args = parser.parse_args()
@@ -173,49 +146,52 @@ Examples:
     if not args.tcp and not args.udp:
         args.tcp = True
 
-    target = resolve_target(args.target)
-    if not target:
+    if not validate_target(args.target):
         print(f"{Colors.RED}[!] Invalid target: {args.target}{Colors.RESET}")
-        print(
-            f"{Colors.YELLOW}    Format: 192.168.1.1, 192.168.1.0/24 or hostname{Colors.RESET}"
-        )
+        print(f"{Colors.YELLOW}    Format: 192.168.1.1 or 192.168.1.0/24{Colors.RESET}")
         sys.exit(1)
 
+    target = args.target
+
     if args.top_ports:
-        ports = ServiceIdentifier.get_top_ports(args.top_ports)
+        tcp_ports = (
+            ServiceIdentifier.get_top_ports(args.top_ports, "tcp") if args.tcp else []
+        )
+        udp_ports = (
+            ServiceIdentifier.get_top_ports(args.top_ports, "udp") if args.udp else []
+        )
+        ports = sorted(set(tcp_ports + udp_ports))
     else:
         try:
             ports = parse_ports(args.ports)
             if not ports:
                 raise ValueError("No ports specified")
+            tcp_ports = ports if args.tcp else []
+            udp_ports = ports if args.udp else []
         except ValueError as e:
             print(f"{Colors.RED}[!] Port error: {e}{Colors.RESET}")
             sys.exit(1)
 
-    if args.exclude_ports:
-        try:
-            excluded = set(parse_ports(args.exclude_ports))
-            ports = [p for p in ports if p not in excluded]
-            if not ports:
-                print(f"{Colors.RED}[!] All ports were excluded{Colors.RESET}")
-                sys.exit(1)
-        except ValueError as e:
-            print(f"{Colors.RED}[!] Exclude ports error: {e}{Colors.RESET}")
-            sys.exit(1)
-
-    if not args.quiet:
-        print(f"{Colors.GREEN}[*] Target: {target}{Colors.RESET}")
-        if args.target != target:
-            print(f"{Colors.GREEN}[*] Hostname: {args.target}{Colors.RESET}")
+    print(f"{Colors.GREEN}[*] Target: {target}{Colors.RESET}")
+    if args.tcp and args.udp and args.top_ports and tcp_ports != udp_ports:
+        print(
+            f"{Colors.GREEN}[*] TCP ports: {len(tcp_ports)} "
+            f"({min(tcp_ports)}-{max(tcp_ports)}){Colors.RESET}"
+        )
+        print(
+            f"{Colors.GREEN}[*] UDP ports: {len(udp_ports)} "
+            f"({min(udp_ports)}-{max(udp_ports)}){Colors.RESET}"
+        )
+    else:
         print(
             f"{Colors.GREEN}[*] Ports: {len(ports)} ({min(ports)}-{max(ports)}){Colors.RESET}"
         )
-        print(
-            f"{Colors.GREEN}[*] Protocols: "
-            f"{'TCP ' if args.tcp else ''}{'UDP' if args.udp else ''}{Colors.RESET}"
-        )
-        print(f"{Colors.GREEN}[*] Threads: {args.threads}{Colors.RESET}")
-        print()
+    print(
+        f"{Colors.GREEN}[*] Protocols: "
+        f"{'TCP ' if args.tcp else ''}{'UDP' if args.udp else ''}{Colors.RESET}"
+    )
+    print(f"{Colors.GREEN}[*] Threads: {args.threads}{Colors.RESET}")
+    print()
 
     if args.skip_discovery:
         if "/" in target:
@@ -223,25 +199,23 @@ Examples:
             targets = [str(ip) for ip in network.hosts()]
         else:
             targets = [target]
-        if not args.quiet:
-            print(f"{Colors.YELLOW}[*] Skipping host discovery (-Pn){Colors.RESET}")
+        print(f"{Colors.YELLOW}[*] Skipping host discovery (-Pn){Colors.RESET}")
     else:
         discovery = NetworkDiscovery()
-        targets = discovery.discover(target, verbose=args.verbose)
+        targets = discovery.discover(target)
 
     if not targets:
         print(f"{Colors.RED}[!] No active hosts found{Colors.RESET}")
         sys.exit(1)
 
-    if not args.quiet:
-        print(f"{Colors.GREEN}[+] Active hosts: {len(targets)}{Colors.RESET}")
-        print()
+    print(f"{Colors.GREEN}[+] Active hosts: {len(targets)}{Colors.RESET}")
+    print()
 
     scanner = PortScanner(
         threads=args.threads,
         timeout=args.timeout,
         grab_banner=not args.no_banner,
-        socket_only=args.socket_mode,
+        retries=args.retries,
     )
 
     scan_start = time.time()
@@ -253,10 +227,9 @@ Examples:
         host_info = scanner.get_host_info(ip)
         hostname = host_info["hostname"]
 
-        if not args.quiet:
-            print(f"{Colors.CYAN}{'=' * 60}{Colors.RESET}")
-            print(f"{Colors.CYAN}[*] Scanning: {ip}{Colors.RESET}")
-            print(f"{Colors.CYAN}{'=' * 60}{Colors.RESET}")
+        print(f"{Colors.CYAN}{'=' * 60}{Colors.RESET}")
+        print(f"{Colors.CYAN}[*] Scanning: {ip}{Colors.RESET}")
+        print(f"{Colors.CYAN}{'=' * 60}{Colors.RESET}")
 
         results = {
             "ip": ip,
@@ -267,93 +240,73 @@ Examples:
         }
 
         if args.tcp:
-            if not args.quiet:
-                print(f"\n{Colors.YELLOW}[TCP Scan]{Colors.RESET}")
-            tcp_results = scanner.scan_tcp(ip, ports, verbose=args.verbose)
+            print(f"\n{Colors.YELLOW}[TCP Scan]{Colors.RESET}")
+            tcp_results = scanner.scan_tcp(ip, tcp_ports)
             results["tcp"] = tcp_results
             total_tcp_open += len(tcp_results)
 
             if tcp_results:
-                if args.quiet:
-                    for r in tcp_results:
-                        print(
-                            f"{ip}:{r['port']}/tcp open "
-                            f"{r.get('service', '')} "
-                            f"{r.get('banner', '')}"
-                        )
-                else:
+                print(
+                    f"  {Colors.DIM}{'Port':<10} {'State':<8} "
+                    f"{'Service':<18} {'Banner':<28} {'OS'}{Colors.RESET}"
+                )
+                print(f"  {Colors.DIM}{'-' * 85}{Colors.RESET}")
+
+                for r in tcp_results:
+                    banner = r.get("banner", "-")
+                    if banner and len(banner) > 28:
+                        banner = banner[:25] + "..."
+                    if not banner:
+                        banner = "-"
+                    os_info = r.get("os", "-") or "-"
+
                     print(
-                        f"  {Colors.DIM}{'Port':<10} {'State':<8} "
-                        f"{'Service':<18} {'Banner':<28} {'OS'}{Colors.RESET}"
+                        f"  {Colors.GREEN}{r['port']}/tcp{'':<4} "
+                        f"{'open':<8} "
+                        f"{r.get('service', 'unknown'):<18} "
+                        f"{banner:<28} "
+                        f"{os_info}{Colors.RESET}"
                     )
-                    print(f"  {Colors.DIM}{'-' * 85}{Colors.RESET}")
-
-                    for r in tcp_results:
-                        banner = r.get("banner", "-")
-                        if banner and len(banner) > 28:
-                            banner = banner[:25] + "..."
-                        if not banner:
-                            banner = "-"
-                        os_info = r.get("os", "-") or "-"
-
-                        print(
-                            f"  {Colors.GREEN}{r['port']}/tcp{'':<4} "
-                            f"{'open':<8} "
-                            f"{r.get('service', 'unknown'):<18} "
-                            f"{banner:<28} "
-                            f"{os_info}{Colors.RESET}"
-                        )
-            elif not args.quiet:
+            else:
                 print(f"  {Colors.RED}No open TCP ports{Colors.RESET}")
 
         if args.udp:
-            if not args.quiet:
-                print(f"\n{Colors.YELLOW}[UDP Scan]{Colors.RESET}")
-            udp_results = scanner.scan_udp(
-                ip, ports, verbose=args.verbose, open_only=args.open_only
-            )
+            print(f"\n{Colors.YELLOW}[UDP Scan]{Colors.RESET}")
+            udp_results = scanner.scan_udp(ip, udp_ports, open_only=args.open_only)
             results["udp"] = udp_results
             total_udp_open += len(udp_results)
 
             if udp_results:
-                if args.quiet:
-                    for r in udp_results:
-                        print(
-                            f"{ip}:{r['port']}/udp {r['state']} "
-                            f"{r.get('service', '')}"
-                        )
-                else:
-                    print(
-                        f"  {Colors.DIM}{'Port':<10} {'State':<15} "
-                        f"{'Service':<18} {'OS'}{Colors.RESET}"
-                    )
-                    print(f"  {Colors.DIM}{'-' * 60}{Colors.RESET}")
+                print(
+                    f"  {Colors.DIM}{'Port':<10} {'State':<15} "
+                    f"{'Service':<18} {'OS'}{Colors.RESET}"
+                )
+                print(f"  {Colors.DIM}{'-' * 60}{Colors.RESET}")
 
-                    for r in udp_results:
-                        os_info = r.get("os", "-") or "-"
-                        state_color = (
-                            Colors.GREEN if r["state"] == "open" else Colors.YELLOW
-                        )
-                        print(
-                            f"  {state_color}{r['port']}/udp{'':<4} "
-                            f"{r['state']:<15} "
-                            f"{r.get('service', 'unknown'):<18} "
-                            f"{os_info}{Colors.RESET}"
-                        )
-            elif not args.quiet:
+                for r in udp_results:
+                    os_info = r.get("os", "-") or "-"
+                    state_color = (
+                        Colors.GREEN if r["state"] == "open" else Colors.YELLOW
+                    )
+                    print(
+                        f"  {state_color}{r['port']}/udp{'':<4} "
+                        f"{r['state']:<15} "
+                        f"{r.get('service', 'unknown'):<18} "
+                        f"{os_info}{Colors.RESET}"
+                    )
+            else:
                 print(f"  {Colors.RED}No open UDP ports detected{Colors.RESET}")
 
         all_results.append(results)
-        if not args.quiet:
-            print()
+        print()
 
     scan_duration = time.time() - scan_start
 
     scan_params = {
         "threads": args.threads,
         "timeout": args.timeout,
-        "mode": "socket" if args.socket_mode else "scapy",
         "banner": not args.no_banner,
+        "retries": args.retries,
     }
 
     report = ReportGenerator(args.output)
@@ -368,22 +321,21 @@ Examples:
         scan_params=scan_params,
     )
 
-    if not args.quiet:
-        print(f"{Colors.CYAN}{'=' * 60}{Colors.RESET}")
-        print(f"{Colors.CYAN}  SCAN COMPLETE{Colors.RESET}")
-        print(f"{Colors.CYAN}{'=' * 60}{Colors.RESET}")
-        print(f"  {Colors.GREEN}Hosts scanned:    {len(targets)}{Colors.RESET}")
-        print(
-            f"  {Colors.GREEN}Open ports:       "
-            f"{total_tcp_open} TCP, {total_udp_open} UDP{Colors.RESET}"
-        )
-        print(
-            f"  {Colors.GREEN}Duration:         "
-            f"{report._format_duration(scan_duration)}{Colors.RESET}"
-        )
-        for f in generated_files:
-            print(f"  {Colors.GREEN}Report saved:     {f}{Colors.RESET}")
-        print(f"{Colors.CYAN}{'=' * 60}{Colors.RESET}")
+    print(f"{Colors.CYAN}{'=' * 60}{Colors.RESET}")
+    print(f"{Colors.CYAN}  SCAN COMPLETE{Colors.RESET}")
+    print(f"{Colors.CYAN}{'=' * 60}{Colors.RESET}")
+    print(f"  {Colors.GREEN}Hosts scanned:    {len(targets)}{Colors.RESET}")
+    print(
+        f"  {Colors.GREEN}Open ports:       "
+        f"{total_tcp_open} TCP, {total_udp_open} UDP{Colors.RESET}"
+    )
+    print(
+        f"  {Colors.GREEN}Duration:         "
+        f"{report._format_duration(scan_duration)}{Colors.RESET}"
+    )
+    for f in generated_files:
+        print(f"  {Colors.GREEN}Report saved:     {f}{Colors.RESET}")
+    print(f"{Colors.CYAN}{'=' * 60}{Colors.RESET}")
 
 
 if __name__ == "__main__":

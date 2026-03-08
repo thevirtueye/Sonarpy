@@ -1,9 +1,10 @@
+import concurrent.futures
+import ipaddress
 import os
 import socket
-import ipaddress
 import subprocess
-import concurrent.futures
 from typing import List, Optional
+
 from .colors import Colors
 
 
@@ -43,7 +44,7 @@ class NetworkDiscovery:
 
     def _ping_host_scapy(self, ip: str) -> Optional[str]:
         try:
-            from scapy.all import IP, ICMP, sr1
+            from scapy.all import ICMP, IP, sr1
 
             packet = IP(dst=ip) / ICMP()
             response = sr1(packet, timeout=self.timeout, verbose=0)
@@ -51,12 +52,8 @@ class NetworkDiscovery:
         except Exception:
             return None
 
-    def discover(
-        self, target: str, use_scapy: bool = False, verbose: bool = False
-    ) -> List[str]:
+    def discover(self, target: str) -> List[str]:
         if "/" not in target:
-            if verbose:
-                print(f"{Colors.DIM}[*] Single target: {target}{Colors.RESET}")
             return [target]
 
         try:
@@ -67,20 +64,16 @@ class NetworkDiscovery:
 
         hosts = [str(ip) for ip in network.hosts() if str(ip) != self._local_ip]
 
-        if verbose:
-            print(f"{Colors.DIM}[*] Scanning {len(hosts)} hosts...{Colors.RESET}")
-
         print(
             f"{Colors.YELLOW}[*] Discovering active hosts in {target}...{Colors.RESET}"
         )
 
-        ping_func = self._ping_host_scapy if use_scapy else self._ping_host
         active_hosts = []
 
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=self.max_workers
         ) as executor:
-            future_to_ip = {executor.submit(ping_func, ip): ip for ip in hosts}
+            future_to_ip = {executor.submit(self._ping_host, ip): ip for ip in hosts}
 
             completed = 0
             for future in concurrent.futures.as_completed(future_to_ip):
@@ -89,12 +82,8 @@ class NetworkDiscovery:
 
                 if result:
                     active_hosts.append(result)
-                    if verbose:
-                        print(
-                            f"{Colors.GREEN}  [+] Active host: {result}{Colors.RESET}"
-                        )
 
-                if not verbose and completed % 50 == 0:
+                if completed % 50 == 0:
                     progress = int((completed / len(hosts)) * 100)
                     print(
                         f"\r{Colors.DIM}[*] Progress: {progress}%{Colors.RESET}",
@@ -102,8 +91,7 @@ class NetworkDiscovery:
                         flush=True,
                     )
 
-        if not verbose:
-            print(f"\r{Colors.DIM}[*] Progress: 100%{Colors.RESET}")
+        print(f"\r{Colors.DIM}[*] Progress: 100%{Colors.RESET}")
 
         return sorted(active_hosts, key=lambda x: list(map(int, x.split("."))))
 
@@ -117,9 +105,7 @@ class ARPDiscovery:
         try:
             from scapy.all import ARP, Ether, srp
 
-            print(
-                f"{Colors.YELLOW}[*] ARP Discovery on {target}...{Colors.RESET}"
-            )
+            print(f"{Colors.YELLOW}[*] ARP Discovery on {target}...{Colors.RESET}")
 
             arp = ARP(pdst=target)
             ether = Ether(dst="ff:ff:ff:ff:ff:ff")
