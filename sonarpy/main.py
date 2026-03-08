@@ -4,6 +4,7 @@ Sonarpy v5.0 - Advanced Network Scanner with TCP/UDP support
 """
 
 import argparse
+import ipaddress
 import re
 import socket
 import sys
@@ -79,19 +80,18 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  sonarpy -t 192.168.1.1 -p 22,80,443
-  sonarpy -t 192.168.1.0/24 -p 1-1000 --udp
-  sonarpy -t scanme.nmap.org --top-ports 100
-  sonarpy -t 10.0.0.1 -p 1-65535 --tcp --udp --format json
-  sonarpy -t 192.168.1.1 -p 1-1000 --tcp --udp --show-filtered
-  sonarpy -t 192.168.1.1 --top-ports 20 --format txt,json,csv
+  sonarpy 192.168.1.1 -p 22,80,443
+  sonarpy 192.168.1.0/24 -p 1-1000 --udp
+  sonarpy scanme.nmap.org --top-ports 100
+  sonarpy 10.0.0.1 -p 1-65535 --tcp --udp --format json
+  sonarpy 192.168.1.1 -p 1-1000 --tcp --udp
+  sonarpy 192.168.1.1 --top-ports 20 --format txt,json,csv
+  sonarpy 192.168.1.50 -Pn --top-ports 50 --socket-mode
         """,
     )
 
     parser.add_argument(
-        "-t",
-        "--target",
-        required=True,
+        "target",
         help="Target IP, subnet or hostname (e.g. 192.168.1.1, 192.168.1.0/24, scanme.nmap.org)",
     )
 
@@ -139,15 +139,21 @@ Examples:
         help="Use sockets only, no scapy (recommended on Windows)",
     )
     parser.add_argument(
-        "--show-filtered",
+        "--open-only",
         action="store_true",
-        help="Show open|filtered UDP ports in results",
+        help="Show only confirmed open ports (hides open|filtered)",
     )
     parser.add_argument(
         "--exclude-ports",
         type=str,
         default=None,
         help="Ports to exclude (e.g. 22,80 or 100-200)",
+    )
+    parser.add_argument(
+        "-Pn",
+        "--skip-discovery",
+        action="store_true",
+        help="Skip host discovery, treat all hosts as online",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     parser.add_argument(
@@ -211,8 +217,17 @@ Examples:
         print(f"{Colors.GREEN}[*] Threads: {args.threads}{Colors.RESET}")
         print()
 
-    discovery = NetworkDiscovery()
-    targets = discovery.discover(target, verbose=args.verbose)
+    if args.skip_discovery:
+        if "/" in target:
+            network = ipaddress.ip_network(target, strict=False)
+            targets = [str(ip) for ip in network.hosts()]
+        else:
+            targets = [target]
+        if not args.quiet:
+            print(f"{Colors.YELLOW}[*] Skipping host discovery (-Pn){Colors.RESET}")
+    else:
+        discovery = NetworkDiscovery()
+        targets = discovery.discover(target, verbose=args.verbose)
 
     if not targets:
         print(f"{Colors.RED}[!] No active hosts found{Colors.RESET}")
@@ -295,7 +310,7 @@ Examples:
             if not args.quiet:
                 print(f"\n{Colors.YELLOW}[UDP Scan]{Colors.RESET}")
             udp_results = scanner.scan_udp(
-                ip, ports, verbose=args.verbose, show_filtered=args.show_filtered
+                ip, ports, verbose=args.verbose, open_only=args.open_only
             )
             results["udp"] = udp_results
             total_udp_open += len(udp_results)

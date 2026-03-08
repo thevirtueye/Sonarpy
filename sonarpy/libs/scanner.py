@@ -1,21 +1,23 @@
+import concurrent.futures
+import logging
 import os
 import re
-import sys
 import socket
-import logging
+import sys
 import threading
 import time
-import concurrent.futures
-from typing import List, Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
+
 from .banner import BannerGrabber
-from .services import ServiceIdentifier
 from .colors import Colors
+from .services import ServiceIdentifier
 
 logging.getLogger("scapy.runtime").setLevel(logging.CRITICAL)
 logging.getLogger("scapy").setLevel(logging.CRITICAL)
 
 if os.name == "nt":
     import warnings
+
     warnings.filterwarnings("ignore", category=ResourceWarning)
 
 _scapy_lock = threading.Lock() if os.name == "nt" else None
@@ -37,6 +39,54 @@ class PortScanner:
         self.banner_grabber = BannerGrabber(timeout=timeout)
         self.service_id = ServiceIdentifier()
         self._os_cache = {}
+        self._scapy_warned = False
+
+        if not self.socket_only:
+            self._check_scapy()
+
+    def _check_scapy(self):
+        try:
+            import contextlib
+            import io
+
+            with contextlib.redirect_stderr(io.StringIO()):
+                from scapy.all import conf
+
+                conf.verb = 0
+
+            is_root = (os.name != "nt" and os.geteuid() == 0) or (
+                os.name == "nt" and self._is_windows_admin()
+            )
+
+            if not is_root:
+                print(
+                    f"{Colors.YELLOW}[*] Scapy requires root/admin privileges, "
+                    f"falling back to socket mode{Colors.RESET}"
+                )
+                if os.name == "nt":
+                    print(
+                        f"{Colors.DIM}    Run as Administrator for SYN scan{Colors.RESET}"
+                    )
+                else:
+                    print(f"{Colors.DIM}    Run with sudo for SYN scan{Colors.RESET}")
+                self.socket_only = True
+
+        except Exception:
+            print(
+                f"{Colors.YELLOW}[*] Scapy not installed, "
+                f"falling back to socket mode{Colors.RESET}"
+            )
+            print(f"{Colors.DIM}    Install with: pip install scapy{Colors.RESET}")
+            self.socket_only = True
+
+    @staticmethod
+    def _is_windows_admin() -> bool:
+        try:
+            import ctypes
+
+            return ctypes.windll.shell32.IsUserAnAdmin() != 0
+        except Exception:
+            return False
 
     def _detect_os(self, ttl: int) -> str:
         if 0 < ttl <= 64:
@@ -89,13 +139,11 @@ class PortScanner:
 
     def _scan_tcp_port_scapy(self, ip: str, port: int) -> Optional[Dict]:
         try:
-            from scapy.all import IP, TCP, sr1, send, RandShort, conf
+            from scapy.all import IP, TCP, RandShort, conf, send, sr1
 
             conf.verb = 0
 
-            syn_packet = IP(dst=ip) / TCP(
-                sport=RandShort(), dport=port, flags="S"
-            )
+            syn_packet = IP(dst=ip) / TCP(sport=RandShort(), dport=port, flags="S")
 
             if _scapy_lock:
                 with _scapy_lock:
@@ -185,7 +233,7 @@ class PortScanner:
             return self._scan_udp_port_socket(ip, port)
 
         try:
-            from scapy.all import IP, UDP, ICMP, sr1, conf
+            from scapy.all import ICMP, IP, UDP, conf, sr1
 
             conf.verb = 0
 
@@ -274,9 +322,7 @@ class PortScanner:
             return f"{remaining:.0f}s"
         return f"{remaining / 60:.1f}m"
 
-    def scan_tcp(
-        self, ip: str, ports: List[int], verbose: bool = False
-    ) -> List[Dict]:
+    def scan_tcp(self, ip: str, ports: List[int], verbose: bool = False) -> List[Dict]:
         results = []
         total_ports = len(ports)
         start_time = time.time()
@@ -322,8 +368,11 @@ class PortScanner:
         return sorted(results, key=lambda x: x["port"])
 
     def scan_udp(
-        self, ip: str, ports: List[int], verbose: bool = False,
-        show_filtered: bool = False,
+        self,
+        ip: str,
+        ports: List[int],
+        verbose: bool = False,
+        open_only: bool = False,
     ) -> List[Dict]:
         results = []
         total_ports = len(ports)
@@ -347,7 +396,9 @@ class PortScanner:
                 try:
                     result = future.result()
                     if result:
-                        if show_filtered or result["state"] == "open":
+                        if open_only and result["state"] != "open":
+                            pass
+                        else:
                             results.append(result)
                 except Exception:
                     pass
@@ -377,7 +428,7 @@ class PortScanner:
         tcp: bool = True,
         udp: bool = False,
         verbose: bool = False,
-        show_filtered: bool = False,
+        open_only: bool = False,
     ) -> Dict:
         results = {
             "ip": ip,
@@ -390,6 +441,6 @@ class PortScanner:
             results["tcp"] = self.scan_tcp(ip, ports, verbose)
 
         if udp:
-            results["udp"] = self.scan_udp(ip, ports, verbose, show_filtered)
+            results["udp"] = self.scan_udp(ip, ports, verbose, open_only)
 
         return results
