@@ -35,7 +35,6 @@ Advanced network scanner with TCP and UDP support, built in Python.
 git clone https://github.com/thevirtueye/sonarpy.git
 cd sonarpy
 pip install -e .
-pip install scapy
 ```
 
 ### Windows
@@ -46,10 +45,9 @@ Install [Npcap](https://npcap.com/#download) first (required for Scapy support).
 git clone https://github.com/thevirtueye/sonarpy.git
 cd sonarpy
 py -m pip install -e .
-py -m pip install scapy
 ```
 
-Scapy and Npcap are optional on all platforms. Without them, Sonarpy automatically falls back to socket-based scanning which works without any extra dependencies.
+Scapy is installed automatically. On Windows, Npcap is additionally required for Scapy to work. Without Npcap on Windows, Sonarpy falls back to socket-based scanning.
 
 ### Running
 
@@ -180,7 +178,6 @@ The lists are defined in `sonarpy/libs/services.py` and can be customized. Servi
 ```
 sonarpy/
 ├── pyproject.toml
-├── requirements.txt
 ├── README.md
 ├── LICENSE
 ├── .gitignore
